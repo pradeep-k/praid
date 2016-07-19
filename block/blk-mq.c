@@ -1511,13 +1511,13 @@ static blk_qc_t blk_sq_make_request(struct request_queue *q, struct bio *bio)
 		list_add_tail(&bio->queuelist, &plug->mq_list);
         plug->request_count++;
 		
-        /*
-        if (request_count >= BLK_MAX_REQUEST_COUNT) 
-        //if (request_count >= BLK_MAX_REQUEST_COUNT || plug->request_count >= 96) 
+        
+        if (plug->request_count >= BLK_MAX_REQUEST_COUNT)
+        //if (request_count >= BLK_MAX_REQUEST_COUNT || plug->request_count >= 16) 
         {
             blk_flush_plug_list(plug, true);//XXX
 			trace_block_plug(q);
-		}*/
+		}
 		return cookie;
 	}
     
