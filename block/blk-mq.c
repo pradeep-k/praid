@@ -39,6 +39,9 @@ struct blk_map_ctx {
 };
 
 static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx);
+static struct request *blk_mq_map_request_nosleep(struct request_queue *q,
+					  struct bio *bio,
+					  struct blk_map_ctx *data);
 static struct request *blk_mq_map_request(struct request_queue *q,
 					  struct bio *bio,
 					  struct blk_map_ctx *data);
@@ -1208,11 +1211,17 @@ void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 		bio = list_entry(list.next, struct bio, queuelist);
 		list_del_init(&bio->queuelist);
         q = bdev_get_queue(bio->bi_bdev);
-        rq = blk_mq_map_request(q, bio, &data);
-        if (unlikely(!rq))
-            return ;//BLK_QC_T_NONE;
+        rq = blk_mq_map_request_nosleep(q, bio, &data);
+        if (unlikely(!rq)) {
+			if (this_ctx) {
+				blk_mq_insert_requests(this_q, this_ctx,
+							&ctx_list, depth,
+							true);
+            }
+            rq = blk_mq_map_request(q, bio, &data);
+            BUG_ON(!rq);
+        }
 
-        //cookie = blk_tag_to_qc_t(rq->tag, data.hctx->queue_num);
 		blk_mq_bio_to_request(rq, bio);
         BUG_ON(!rq->q);
 		if (rq->mq_ctx != this_ctx) {
@@ -1281,6 +1290,35 @@ insert_rq:
 	}
 }
 
+static struct request *blk_mq_map_request_nosleep(struct request_queue *q,
+					  struct bio *bio,
+					  struct blk_map_ctx *data)
+{
+	struct blk_mq_hw_ctx *hctx;
+	struct blk_mq_ctx *ctx;
+	struct request *rq;
+	int rw = bio_data_dir(bio);
+	struct blk_mq_alloc_data alloc_data;
+
+	blk_queue_enter_live(q);
+	ctx = blk_mq_get_ctx(q);
+	hctx = q->mq_ops->map_queue(q, ctx->cpu);
+
+	if (rw_is_sync(bio->bi_rw))
+		rw |= REQ_SYNC;
+
+	blk_mq_set_alloc_data(&alloc_data, q, BLK_MQ_REQ_NOWAIT, ctx, hctx);
+	rq = __blk_mq_alloc_request(&alloc_data, rw);
+	if (unlikely(!rq)) {
+        return rq;
+	}
+	trace_block_getrq(q, bio, rw);
+
+	hctx->queued++;
+	data->hctx = hctx;
+	data->ctx = ctx;
+	return rq;
+}
 
 static struct request *blk_mq_map_request(struct request_queue *q,
 					  struct bio *bio,
