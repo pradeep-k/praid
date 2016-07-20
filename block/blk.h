@@ -98,6 +98,7 @@ unsigned long blk_rq_timeout(unsigned long timeout);
 void blk_add_timer(struct request *req);
 void blk_delete_timer(struct request *);
 
+bool blk_attempt_nebr_merge(struct request_queue *q, struct bio *bio, struct request *rq);
 
 bool bio_attempt_front_merge(struct request_queue *q, struct request *req,
 			     struct bio *bio);

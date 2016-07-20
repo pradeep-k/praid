@@ -1190,7 +1190,7 @@ void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 {
 	struct blk_mq_ctx *this_ctx;
 	struct request_queue *this_q;
-	struct request *rq;
+	struct request *rq = NULL;
 	struct bio *bio;
     struct request_queue* q;
 	struct blk_map_ctx data;
@@ -1211,6 +1211,13 @@ void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 		bio = list_entry(list.next, struct bio, queuelist);
 		list_del_init(&bio->queuelist);
         q = bdev_get_queue(bio->bi_bdev);
+        
+        //See if we can merge here
+	    if (rq && !blk_queue_nomerges(q) && 
+            (blk_attempt_nebr_merge(q, bio, rq))) {
+                continue;
+            }
+
         rq = blk_mq_map_request_nosleep(q, bio, &data);
         if (unlikely(!rq)) {
 			if (this_ctx) {

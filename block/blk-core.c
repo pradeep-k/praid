@@ -1661,6 +1661,24 @@ out:
 	return ret;
 }
 
+bool blk_attempt_nebr_merge(struct request_queue *q, struct bio *bio, struct request *rq)
+{
+    int el_ret;
+
+    if (rq->q != q || !blk_rq_merge_ok(rq, bio))
+        return false; 
+
+    el_ret = blk_try_merge(rq, bio);
+    if (el_ret == ELEVATOR_BACK_MERGE) {
+        return  bio_attempt_back_merge(q, rq, bio);
+    }
+    if (el_ret == ELEVATOR_FRONT_MERGE) {
+        return bio_attempt_front_merge(q, rq, bio);
+    }
+	
+	return false;
+}
+
 unsigned int blk_plug_queued_count(struct request_queue *q)
 {
 	struct blk_plug *plug;
