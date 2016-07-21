@@ -38,6 +38,8 @@ struct blk_map_ctx {
 	struct blk_mq_ctx *ctx;
 };
 
+static int blk_mq_direct_issue_request(struct request *rq, blk_qc_t *cookie);
+
 static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx);
 static struct request *blk_mq_map_request_nosleep(struct request_queue *q,
 					  struct bio *bio,
@@ -486,6 +488,7 @@ static void blk_mq_requeue_work(struct work_struct *work)
 	LIST_HEAD(rq_list);
 	struct request *rq, *next;
 	unsigned long flags;
+	blk_qc_t cookie;
 
 	spin_lock_irqsave(&q->requeue_lock, flags);
 	list_splice_init(&q->requeue_list, &rq_list);
@@ -497,20 +500,42 @@ static void blk_mq_requeue_work(struct work_struct *work)
 
 		rq->cmd_flags &= ~REQ_SOFTBARRIER;
 		list_del_init(&rq->queuelist);
-		blk_mq_insert_request(rq, true, false, false);
+        //XXX dispatch directly
+		//blk_mq_insert_request(rq, true, false, false);
+		if (-1 == blk_mq_direct_issue_request(rq, &cookie))
+        {
+	        struct blk_mq_hw_ctx *hctx = rq->q->mq_ops->map_queue(rq->q,
+			                                rq->mq_ctx->cpu);
+            spin_lock(&hctx->lock);
+            list_splice(&rq_list, &hctx->dispatch);
+            spin_unlock(&hctx->lock);
+	        blk_mq_run_hw_queue(hctx, true);
+            return;
+        }
 	}
 
 	while (!list_empty(&rq_list)) {
 		rq = list_entry(rq_list.next, struct request, queuelist);
 		list_del_init(&rq->queuelist);
-		blk_mq_insert_request(rq, false, false, false);
+		//XXX
+        //blk_mq_insert_request(rq, false, false, false);
+		if (-1 == blk_mq_direct_issue_request(rq, &cookie))
+        {
+	        struct blk_mq_hw_ctx *hctx = rq->q->mq_ops->map_queue(rq->q,
+			                                rq->mq_ctx->cpu);
+            spin_lock(&hctx->lock);
+            list_splice(&rq_list, &hctx->dispatch);
+            spin_unlock(&hctx->lock);
+	        blk_mq_run_hw_queue(hctx, true);
+            return;
+        }
 	}
 
 	/*
 	 * Use the start variant of queue running here, so that running
 	 * the requeue work will kick stopped queues.
 	 */
-	blk_mq_start_hw_queues(q);
+	//blk_mq_start_hw_queues(q);
 }
 
 void blk_mq_add_to_requeue_list(struct request *rq, bool at_head)
