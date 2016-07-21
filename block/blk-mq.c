@@ -700,6 +700,7 @@ static void blk_mq_rq_timer(unsigned long priv)
 static bool blk_mq_attempt_merge(struct request_queue *q,
 				 struct blk_mq_ctx *ctx, struct bio *bio)
 {
+    /*
 	struct request *rq;
 	int checked = 8;
 
@@ -727,7 +728,7 @@ static bool blk_mq_attempt_merge(struct request_queue *q,
 			break;
 		}
 	}
-
+*/
 	return false;
 }
 
@@ -774,12 +775,15 @@ static void flush_busy_ctxs(struct blk_mq_hw_ctx *hctx, struct list_head *list)
 static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 {
 	struct request_queue *q = hctx->queue;
-	struct request *rq;
+	struct request *rq = NULL;
+    struct bio *bio;
 	LIST_HEAD(rq_list);
+	LIST_HEAD(bio_list);
 	LIST_HEAD(driver_list);
 	struct list_head *dptr;
 	int queued;
-
+    struct blk_map_ctx data;
+	
 	WARN_ON(!cpumask_test_cpu(raw_smp_processor_id(), hctx->cpumask));
 
 	if (unlikely(test_bit(BLK_MQ_S_STOPPED, &hctx->state)))
@@ -787,15 +791,7 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 
 	hctx->run++;
 
-	/*
-	 * Touch any software queue that has pending entries.
-	 */
-	flush_busy_ctxs(hctx, &rq_list);
-
-	/*
-	 * If we have previous entries on our dispatch list, grab them
-	 * and stuff them at the front for more fair dispatch.
-	 */
+    //Run the previous requeued request
 	if (!list_empty_careful(&hctx->dispatch)) {
 		spin_lock(&hctx->lock);
 		if (!list_empty(&hctx->dispatch))
@@ -820,17 +816,6 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		rq = list_first_entry(&rq_list, struct request, queuelist);
 		list_del_init(&rq->queuelist);
 
-        /*
-        //Convert bio to request
-	    rq = blk_mq_map_request(q, bio, &data);
-	    if (unlikely(!rq))
-		    break; //XXX
-
-	    //cookie = blk_tag_to_qc_t(rq->tag, data.hctx->queue_num);
-		blk_mq_bio_to_request(rq, bio);
-		blk_mq_put_ctx(data.ctx);
-        //End
-        */
 		bd.rq = rq;
 		bd.list = dptr;
 		bd.last = list_empty(&rq_list);
@@ -861,8 +846,93 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		 */
 		if (!dptr && rq_list.next != rq_list.prev)
 			dptr = &driver_list;
-	}
+    }
 
+    if (!list_empty(&rq_list)) {
+        goto out; 
+    }
+
+    /*
+	 * Touch any software queue that has pending entries.
+	 */
+	flush_busy_ctxs(hctx, &bio_list);
+
+	/*
+	 * If we have previous entries on our dispatch list, grab them
+	 * and stuff them at the front for more fair dispatch.
+	 */
+	spin_lock(&hctx->lock);
+	list_splice_init(&hctx->requeue, &bio_list);
+    spin_unlock(&hctx->lock);
+	
+    dptr = NULL;
+    rq = NULL;
+    while(!list_empty(&bio_list)) {
+		struct blk_mq_queue_data bd;
+	    LIST_HEAD(driver_list);
+		int ret;
+
+		bio = list_first_entry(&bio_list, struct bio, queuelist);
+
+        if (rq && !blk_queue_nomerges(q) &&
+            (blk_attempt_nebr_merge(q, bio, rq))) {
+		    list_del_init(&bio->queuelist);
+            continue;
+        }
+        //XXX Send for dispatch
+        if (rq) {
+            bd.rq = rq;
+            bd.list = dptr;
+            bd.last = list_empty(&bio_list);
+
+            ret = q->mq_ops->queue_rq(hctx, &bd);
+            switch (ret) {
+            case BLK_MQ_RQ_QUEUE_OK:
+                queued++;
+                break;
+            case BLK_MQ_RQ_QUEUE_BUSY:
+                list_add(&rq->queuelist, &rq_list);
+                __blk_mq_requeue_request(rq);
+                break;
+            default:
+                pr_err("blk-mq: bad return on queue: %d\n", ret);
+            case BLK_MQ_RQ_QUEUE_ERROR:
+                rq->errors = -EIO;
+                blk_mq_end_request(rq, rq->errors);
+                break;
+            }
+            rq = NULL;
+            
+            if (ret == BLK_MQ_RQ_QUEUE_BUSY)
+                break;
+        }
+
+		/*
+		 * We've done the first request. If we have more than 1
+		 * left in the list, set dptr to defer issue.
+		 */
+		if (!dptr && bio_list.next != bio_list.prev)
+			dptr = &driver_list;
+        
+        //Convert bio to request
+	    rq = blk_mq_map_request_nosleep(q, bio, &data);
+	    if (unlikely(!rq))
+		    break;
+
+	    //cookie = blk_tag_to_qc_t(rq->tag, data.hctx->queue_num);
+		list_del_init(&bio->queuelist);
+		blk_mq_bio_to_request(rq, bio);
+		blk_mq_put_ctx(data.ctx);
+        //End
+    }
+
+    //We are now handling the last request
+    if (rq) {
+        list_add(&rq->queuelist, &rq_list);
+    }
+
+
+out:    
 	if (!queued)
 		hctx->dispatched[0]++;
 	else if (queued < (1 << (BLK_MQ_MAX_DISPATCH_ORDER - 1)))
@@ -872,8 +942,9 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	 * Any items that need requeuing? Stuff them into hctx->dispatch,
 	 * that is where we will continue on next queue run.
 	 */
-	if (!list_empty(&rq_list)) {
+	if (!list_empty(&rq_list) || !list_empty(&bio_list)) {
 		spin_lock(&hctx->lock);
+		list_splice(&bio_list, &hctx->requeue);
 		list_splice(&rq_list, &hctx->dispatch);
 		spin_unlock(&hctx->lock);
 		/*
@@ -1042,10 +1113,13 @@ static inline void __blk_mq_insert_req_list(struct blk_mq_hw_ctx *hctx,
 {
 	trace_block_rq_insert(hctx->queue, rq);
 
+	spin_lock(&hctx->lock);
+
 	if (at_head)
-		list_add(&rq->queuelist, &ctx->rq_list);
+		list_add(&rq->queuelist, &hctx->dispatch);
 	else
-		list_add_tail(&rq->queuelist, &ctx->rq_list);
+		list_add_tail(&rq->queuelist, &hctx->dispatch);
+	spin_unlock(&hctx->lock);
 }
 
 static void __blk_mq_insert_request(struct blk_mq_hw_ctx *hctx,
@@ -1080,6 +1154,7 @@ void blk_mq_insert_request(struct request *rq, bool at_head, bool run_queue,
 	blk_mq_put_ctx(current_ctx);
 }
 
+/*
 static void blk_mq_insert_requests(struct request_queue *q,
 				     struct blk_mq_ctx *ctx,
 				     struct list_head *list,
@@ -1100,10 +1175,10 @@ static void blk_mq_insert_requests(struct request_queue *q,
 		ctx = current_ctx;
 	hctx = q->mq_ops->map_queue(q, ctx->cpu);
 
-	/*
+	/ *
 	 * preemption doesn't flush plug list, so it's possible ctx->cpu is
 	 * offline now
-	 */
+	 * /
 	spin_lock(&ctx->lock);
 	while (!list_empty(list)) {
 
@@ -1178,20 +1253,20 @@ static void blk_mq_insert_requests(struct request_queue *q,
         }
         if (unlikely(hctx->next_cpu != cpu))
             hctx->next_cpu = cpu;
-/*
+/ *
         int cpu = (first_minor >> 4) % 24;
         if (rq->rq_disk->major == 8 && first_minor != 128) {
             hctx->next_cpu = cpu;
         } else {
             hctx->next_cpu = WORK_CPU_UNBOUND;
         }
-*/      
+* /      
     }
 
 	blk_mq_run_hw_queue(hctx, from_schedule);
 	blk_mq_put_ctx(current_ctx);
 }
-
+*/
 static int plug_bio_cmp(void *priv, struct list_head *a, struct list_head *b)
 {
 	struct bio *rqa = container_of(a, struct bio, queuelist);
@@ -1213,14 +1288,110 @@ static int plug_ctx_cmp(void *priv, struct list_head *a, struct list_head *b)
 }
 */
 
+
+static void blk_mq_insert_bios(struct request_queue* q, struct list_head * list,
+                               int depth, bool from_schedule)
+{
+	struct blk_mq_hw_ctx *hctx;
+	struct blk_mq_ctx *ctx;
+    int first_minor = 0;
+    int major = 0;
+    struct bio *bio;
+    int cpu = WORK_CPU_UNBOUND;
+
+	trace_block_unplug(q, depth, !from_schedule);
+    
+    bio = list_entry(list->next, struct bio, queuelist);
+    major = bio->bi_bdev->bd_disk->major;
+    first_minor = bio->bi_bdev->bd_disk->first_minor;
+
+	ctx = blk_mq_get_ctx(q);
+	hctx = q->mq_ops->map_queue(q, ctx->cpu);
+
+	spin_lock(&ctx->lock);
+    list_splice_init(list, &ctx->rq_list);
+	blk_mq_hctx_mark_pending(hctx, ctx);
+	spin_unlock(&ctx->lock);
+
+    switch (first_minor) {
+    case 0:
+        cpu = 0;
+        if (major == 65) {
+            cpu = 19;
+        }
+        break;
+    case 16:
+        cpu = 1;
+        break;
+    case 32:
+        cpu = 2;
+        break;
+    case 48: 
+        cpu = 3;
+        break;
+    case 64:
+        cpu = 4;
+        break;
+    case 80:
+        cpu = 5;
+        break;
+    case 96:
+        cpu = 12;
+        break;
+    case 112:
+        cpu = 13;
+        break;
+    case 128:
+        cpu = 14;
+        break;
+    case 144:
+        cpu = 6;
+        break;
+    case 160:
+        cpu = 7;
+        break;
+    case 176:
+        cpu = 8;
+        break;
+    case 192:
+        cpu = 9;
+        break;
+    case 208:
+        cpu = 10;
+        break;
+    case 224:
+        cpu =11;
+        break;
+    case 240:
+        cpu = 18;
+        break;
+    default:
+        cpu = WORK_CPU_UNBOUND;
+        break;
+
+    }
+    if (unlikely(hctx->next_cpu != cpu))
+        hctx->next_cpu = cpu;
+/*
+    int cpu = (first_minor >> 4) % 24;
+    if (>rq_disk->major == 8 && first_minor != 128) {
+        hctx->next_cpu = cpu;
+    } else {
+        hctx->next_cpu = WORK_CPU_UNBOUND;
+    }
+*/      
+
+	blk_mq_run_hw_queue(hctx, from_schedule);
+	blk_mq_put_ctx(ctx);
+    
+}
+
 void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 {
 	struct blk_mq_ctx *this_ctx;
 	struct request_queue *this_q;
-	struct request *rq = NULL;
 	struct bio *bio;
     struct request_queue* q;
-	struct blk_map_ctx data;
 	LIST_HEAD(list);
 	LIST_HEAD(ctx_list);
 	unsigned int depth;
@@ -1239,47 +1410,28 @@ void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 		list_del_init(&bio->queuelist);
         q = bdev_get_queue(bio->bi_bdev);
         
-        //See if we can merge here
-	    if (rq && !blk_queue_nomerges(q) && 
-            (blk_attempt_nebr_merge(q, bio, rq))) {
-                continue;
-            }
-
-        rq = blk_mq_map_request_nosleep(q, bio, &data);
-        if (unlikely(!rq)) {
-			if (this_ctx) {
-				blk_mq_insert_requests(this_q, this_ctx,
-							&ctx_list, depth,
-							true);
-            }
-            rq = blk_mq_map_request(q, bio, &data);
-            BUG_ON(!rq);
-        }
-
-		blk_mq_bio_to_request(rq, bio);
-        BUG_ON(!rq->q);
-		if (rq->mq_ctx != this_ctx) {
-			if (this_ctx) {
-				blk_mq_insert_requests(this_q, this_ctx,
+		if (this_q != q) {
+			if (this_q) {
+                //insert
+				blk_mq_insert_bios(this_q,
 							&ctx_list, depth,
 							from_schedule);
 			}
 
-			this_ctx = rq->mq_ctx;
-			this_q = rq->q;
+			this_q = q;
 			depth = 0;
 		}
 
 		depth++;
-		list_add_tail(&rq->queuelist, &ctx_list);
+		list_add_tail(&bio->queuelist, &ctx_list);
 	}
 
 	/*
 	 * If 'this_ctx' is set, we know we have entries to complete
 	 * on 'ctx_list'. Do those.
 	 */
-	if (this_ctx) {
-		blk_mq_insert_requests(this_q, this_ctx, &ctx_list, depth,
+	if (this_q) {
+		blk_mq_insert_bios(this_q, &ctx_list, depth,
 				       from_schedule);
 	}
 }
@@ -1894,6 +2046,7 @@ static int blk_mq_init_hctx(struct request_queue *q,
 	INIT_DELAYED_WORK(&hctx->delay_work, blk_mq_delay_work_fn);
 	spin_lock_init(&hctx->lock);
 	INIT_LIST_HEAD(&hctx->dispatch);
+	INIT_LIST_HEAD(&hctx->requeue);
 	hctx->queue = q;
 	hctx->queue_num = hctx_idx;
 	hctx->flags = set->flags & ~BLK_MQ_F_TAG_SHARED;

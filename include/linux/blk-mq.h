@@ -22,6 +22,7 @@ struct blk_mq_hw_ctx {
 	struct {
 		spinlock_t		lock;
 		struct list_head	dispatch;
+        struct list_head    requeue;
 	} ____cacheline_aligned_in_smp;
 
 	unsigned long		state;		/* BLK_MQ_S_* flags */
