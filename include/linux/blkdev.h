@@ -1053,6 +1053,7 @@ struct blk_plug {
 	struct list_head mq_list; /* blk-mq requests */
 	struct list_head cb_list; /* md requires an unplug callback */
     int     request_count; 
+    int     disk_count;
 };
 #define BLK_MAX_REQUEST_COUNT 16
 

@@ -1692,6 +1692,7 @@ static blk_qc_t blk_sq_make_request(struct request_queue *q, struct bio *bio)
 	struct blk_map_ctx data;
 	struct request *rq;
 	blk_qc_t cookie = BLK_QC_T_NONE;
+    bool is_async = false;
 
 	blk_queue_bounce(q, &bio);
 
@@ -1735,13 +1736,14 @@ static blk_qc_t blk_sq_make_request(struct request_queue *q, struct bio *bio)
 		list_add_tail(&bio->queuelist, &plug->mq_list);
         plug->request_count++;
 		
-        /*
-        if (plug->request_count >= BLK_MAX_REQUEST_COUNT)
+        
+        if (plug->request_count >= (BLK_MAX_REQUEST_COUNT << plug->disk_count))
         //if (request_count >= BLK_MAX_REQUEST_COUNT || plug->request_count >= 16) 
         {
-            blk_flush_plug_list(plug, true);//XXX
+            is_async = (0 != plug->disk_count);
+            blk_flush_plug_list(plug, is_async);//XXX
 			trace_block_plug(q);
-		}*/
+		}
 		return cookie;
 	}
     

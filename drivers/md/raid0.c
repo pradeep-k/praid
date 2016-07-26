@@ -457,11 +457,15 @@ static void raid0_make_request(struct mddev *mddev, struct bio *bio)
 	struct strip_zone *zone;
 	struct md_rdev *tmp_dev;
 	struct bio *split;
+	struct blk_plug *plug;
 
 	if (unlikely(bio->bi_rw & REQ_FLUSH)) {
 		md_flush_request(mddev, bio);
 		return;
 	}
+
+    
+	plug = current->plug;
 
 	do {
 		sector_t sector = bio->bi_iter.bi_sector;
@@ -488,13 +492,21 @@ static void raid0_make_request(struct mddev *mddev, struct bio *bio)
 		split->bi_iter.bi_sector = sector + zone->dev_start +
 			tmp_dev->data_offset;
 
+        if (plug) {
+            plug->disk_count += zone->nb_dev;
+        }
 		if (unlikely((split->bi_rw & REQ_DISCARD) &&
 			 !blk_queue_discard(bdev_get_queue(split->bi_bdev)))) {
 			/* Just ignore it */
 			bio_endio(split);
 		} else
 			generic_make_request(split);
+        
+        if (plug) {
+            plug->disk_count -= zone->nb_dev;
+        }
 	} while (split != bio);
+
 }
 
 static void raid0_status(struct seq_file *seq, struct mddev *mddev)
