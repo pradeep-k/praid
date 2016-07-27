@@ -781,6 +781,7 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	LIST_HEAD(bio_list);
 	LIST_HEAD(driver_list);
 	struct list_head *dptr;
+	struct blk_mq_queue_data bd;
 	int queued;
     struct blk_map_ctx data;
 	
@@ -810,7 +811,6 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	 */
 	queued = 0;
 	while (!list_empty(&rq_list)) {
-		struct blk_mq_queue_data bd;
 		int ret;
 
 		rq = list_first_entry(&rq_list, struct request, queuelist);
@@ -868,8 +868,6 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
     dptr = NULL;
     rq = NULL;
     while(!list_empty(&bio_list)) {
-		struct blk_mq_queue_data bd;
-	    LIST_HEAD(driver_list);
 		int ret;
 
 		bio = list_first_entry(&bio_list, struct bio, queuelist);
@@ -879,7 +877,7 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		    list_del_init(&bio->queuelist);
             continue;
         }
-        //XXX Send for dispatch
+        
         if (rq) {
             bd.rq = rq;
             bd.list = dptr;
@@ -923,12 +921,32 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		list_del_init(&bio->queuelist);
 		blk_mq_bio_to_request(rq, bio);
 		blk_mq_put_ctx(data.ctx);
-        //End
     }
 
     //We are now handling the last request
     if (rq) {
-        list_add(&rq->queuelist, &rq_list);
+		int ret;
+        bd.rq = rq;
+        bd.list = dptr;
+        bd.last = list_empty(&bio_list);
+
+        ret = q->mq_ops->queue_rq(hctx, &bd);
+        switch (ret) {
+        case BLK_MQ_RQ_QUEUE_OK:
+            queued++;
+            break;
+        case BLK_MQ_RQ_QUEUE_BUSY:
+            list_add(&rq->queuelist, &rq_list);
+            __blk_mq_requeue_request(rq);
+            break;
+        default:
+            pr_err("blk-mq: bad return on queue: %d\n", ret);
+        case BLK_MQ_RQ_QUEUE_ERROR:
+            rq->errors = -EIO;
+            blk_mq_end_request(rq, rq->errors);
+            break;
+        }
+        rq = NULL;
     }
 
 

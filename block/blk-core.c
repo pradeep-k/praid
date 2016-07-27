@@ -3337,10 +3337,12 @@ void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 
 void blk_finish_plug(struct blk_plug *plug)
 {
+    bool async = false;
 	if (plug != current->plug)
 		return;
     //XXX 
-	blk_flush_plug_list(plug, true);
+    async = ((plug->disk_count != 0) && (plug->request_count > 1));
+	blk_flush_plug_list(plug, async);
 
 	current->plug = NULL;
 }
