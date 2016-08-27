@@ -1335,11 +1335,14 @@ static void blk_mq_insert_bios(struct request_queue* q, struct list_head * list,
     case 0:
         cpu = 0;
         if (major == 65) {
-            cpu = 19;
+            cpu = 18;
         }
         break;
     case 16:
         cpu = 1;
+        if (major == 65) {
+            cpu = 19;
+        }
         break;
     case 32:
         cpu = 2;
@@ -1363,25 +1366,25 @@ static void blk_mq_insert_bios(struct request_queue* q, struct list_head * list,
         cpu = 14;
         break;
     case 144:
-        cpu = 6;
+        cpu = 15;
         break;
     case 160:
-        cpu = 7;
+        cpu = 6;
         break;
     case 176:
-        cpu = 8;
+        cpu = 7;
         break;
     case 192:
-        cpu = 9;
+        cpu = 8;
         break;
     case 208:
-        cpu = 10;
+        cpu = 9;
         break;
     case 224:
-        cpu =11;
+        cpu =10;
         break;
     case 240:
-        cpu = 18;
+        cpu = 11;
         break;
     default:
         cpu = WORK_CPU_UNBOUND;
@@ -1755,11 +1758,12 @@ static blk_qc_t blk_sq_make_request(struct request_queue *q, struct bio *bio)
         plug->request_count++;
 		
         
-        if (plug->request_count >= (BLK_MAX_REQUEST_COUNT << plug->disk_count))
+        //if (plug->request_count >= (BLK_MAX_REQUEST_COUNT * plug->disk_count))
+        if (plug->request_count >= 256)
         //if (request_count >= BLK_MAX_REQUEST_COUNT || plug->request_count >= 16) 
         {
-            is_async = (0 != plug->disk_count);
-            blk_flush_plug_list(plug, is_async);//XXX
+            //is_async = (0 != plug->disk_count);
+            blk_flush_plug_list(plug, true);//XXX
 			trace_block_plug(q);
 		}
 		return cookie;
