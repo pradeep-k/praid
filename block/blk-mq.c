@@ -852,10 +852,6 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
         goto out; 
     }
 
-    /*
-	 * Touch any software queue that has pending entries.
-	 */
-	flush_busy_ctxs(hctx, &bio_list);
 
 	/*
 	 * If we have previous entries on our dispatch list, grab them
@@ -865,8 +861,78 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	list_splice_init(&hctx->requeue, &bio_list);
     spin_unlock(&hctx->lock);
 	
-    dptr = NULL;
+    //dptr = NULL;
     rq = NULL;
+    while(!list_empty(&bio_list)) {
+		int ret;
+
+		bio = list_first_entry(&bio_list, struct bio, queuelist);
+
+        if (rq && !blk_queue_nomerges(q) &&
+            (blk_attempt_nebr_merge(q, bio, rq))) {
+		    list_del_init(&bio->queuelist);
+            continue;
+        }
+        
+        if (rq) {
+            bd.rq = rq;
+            bd.list = dptr;
+            bd.last = list_empty(&bio_list);
+
+            ret = q->mq_ops->queue_rq(hctx, &bd);
+            switch (ret) {
+            case BLK_MQ_RQ_QUEUE_OK:
+                queued++;
+                break;
+            case BLK_MQ_RQ_QUEUE_BUSY:
+                list_add(&rq->queuelist, &rq_list);
+                __blk_mq_requeue_request(rq);
+                break;
+            default:
+                pr_err("blk-mq: bad return on queue: %d\n", ret);
+            case BLK_MQ_RQ_QUEUE_ERROR:
+                rq->errors = -EIO;
+                blk_mq_end_request(rq, rq->errors);
+                break;
+            }
+            rq = NULL;
+            
+            if (ret == BLK_MQ_RQ_QUEUE_BUSY)
+                break;
+        }
+
+		/*
+		 * We've done the first request. If we have more than 1
+		 * left in the list, set dptr to defer issue.
+		 */
+		if (!dptr && bio_list.next != bio_list.prev)
+			dptr = &driver_list;
+        
+        //Convert bio to request
+	    rq = blk_mq_map_request_nosleep(q, bio, &data);
+	    if (unlikely(!rq)) {
+            set_bit(BLK_MQ_S_STOPPED, &hctx->state);
+		    break;
+        }
+
+	    //cookie = blk_tag_to_qc_t(rq->tag, data.hctx->queue_num);
+		list_del_init(&bio->queuelist);
+		blk_mq_bio_to_request(rq, bio);
+		blk_mq_put_ctx(data.ctx);
+    }
+
+
+    if (!list_empty(&bio_list)) {
+            goto out;
+    }
+   
+
+    //Lets handle the software-queues now
+    /*
+	 * Touch any software queue that has pending entries.
+	 */
+	flush_busy_ctxs(hctx, &bio_list);
+
     while(!list_empty(&bio_list)) {
 		int ret;
 
