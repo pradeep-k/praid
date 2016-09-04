@@ -914,8 +914,10 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
         
         //Convert bio to request
 	    rq = blk_mq_map_request_nosleep(q, bio, &data);
-	    if (unlikely(!rq))
+	    if (unlikely(!rq)) {
+            set_bit(BLK_MQ_S_STOPPED, &hctx->state);
 		    break;
+        }
 
 	    //cookie = blk_tag_to_qc_t(rq->tag, data.hctx->queue_num);
 		list_del_init(&bio->queuelist);
