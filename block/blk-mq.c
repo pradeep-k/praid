@@ -348,11 +348,9 @@ static int blk_mq_hctx_next_cpu(struct blk_mq_hw_ctx *hctx);
 static void blk_mq_ipi_complete_request(struct request *rq)
 {
 	struct blk_mq_ctx *ctx = rq->mq_ctx;
-	struct blk_mq_hw_ctx *hctx;
 	struct request_queue *q = rq->q;
 	bool shared = false;
 	int cpu;
-    int cpu1;
 
 	if (!test_bit(QUEUE_FLAG_SAME_COMP, &q->queue_flags)) {
 		q->softirq_done_fn(rq);
@@ -360,23 +358,14 @@ static void blk_mq_ipi_complete_request(struct request *rq)
 	}
 
     cpu = get_cpu();
-    //XXX
-    //cpu1 = ctx->cpu;
-    
-	hctx = q->mq_ops->map_queue(q, ctx->cpu);
-    cpu1 = blk_mq_hctx_next_cpu(hctx);
-    if (unlikely(cpu1 == WORK_CPU_UNBOUND)) {
-        cpu1 = ctx->cpu;
-    }
-
 	if (!test_bit(QUEUE_FLAG_SAME_FORCE, &q->queue_flags))
-		shared = cpus_share_cache(cpu, cpu1);
+		shared = cpus_share_cache(cpu, ctx->cpu);
 
-	if (cpu != cpu1 && !shared && cpu_online(cpu1)) {
+    if (cpu != ctx->cpu && !shared && cpu_online(ctx->cpu)) {
 		rq->csd.func = __blk_mq_complete_request_remote;
 		rq->csd.info = rq;
 		rq->csd.flags = 0;
-		smp_call_function_single_async(cpu1, &rq->csd);
+		smp_call_function_single_async(ctx->cpu, &rq->csd);
 	} else {
 		q->softirq_done_fn(rq);
 	}
@@ -1399,68 +1388,70 @@ static void blk_mq_insert_bios(struct request_queue* q, struct list_head * list,
 	blk_mq_hctx_mark_pending(hctx, ctx);
 	spin_unlock(&ctx->lock);
 
-    switch (first_minor) {
-    case 0:
-        cpu = 0;
-        if (major == 65) {
-            cpu = 18;
-        }
-        break;
-    case 16:
-        cpu = 1;
-        if (major == 65) {
-            cpu = 19;
-        }
-        break;
-    case 32:
-        cpu = 2;
-        break;
-    case 48: 
-        cpu = 3;
-        break;
-    case 64:
-        cpu = 4;
-        break;
-    case 80:
-        cpu = 5;
-        break;
-    case 96:
-        cpu = 12;
-        break;
-    case 112:
-        cpu = 13;
-        break;
-    case 128:
-        cpu = 14;
-        break;
-    case 144:
-        cpu = 15;
-        break;
-    case 160:
-        cpu = 6;
-        break;
-    case 176:
-        cpu = 7;
-        break;
-    case 192:
-        cpu = 8;
-        break;
-    case 208:
-        cpu = 9;
-        break;
-    case 224:
-        cpu =10;
-        break;
-    case 240:
-        cpu = 11;
-        break;
-    default:
-        cpu = WORK_CPU_UNBOUND;
-        break;
+    if (major != 259) {
+        switch (first_minor) {
+        case 0:
+            cpu = 0;
+            if (major == 65) {
+                cpu = 18;
+            }
+            break;
+        case 16:
+            cpu = 1;
+            if (major == 65) {
+                cpu = 19;
+            }
+            break;
+        case 32:
+            cpu = 2;
+            break;
+        case 48: 
+            cpu = 3;
+            break;
+        case 64:
+            cpu = 4;
+            break;
+        case 80:
+            cpu = 5;
+            break;
+        case 96:
+            cpu = 12;
+            break;
+        case 112:
+            cpu = 13;
+            break;
+        case 128:
+            cpu = 14;
+            break;
+        case 144:
+            cpu = 15;
+            break;
+        case 160:
+            cpu = 6;
+            break;
+        case 176:
+            cpu = 7;
+            break;
+        case 192:
+            cpu = 8;
+            break;
+        case 208:
+            cpu = 9;
+            break;
+        case 224:
+            cpu =10;
+            break;
+        case 240:
+            cpu = 11;
+            break;
+        default:
+            cpu = WORK_CPU_UNBOUND;
+            break;
 
+        }
+        if (unlikely(hctx->next_cpu != cpu))
+            hctx->next_cpu = cpu;
     }
-    if (unlikely(hctx->next_cpu != cpu))
-        hctx->next_cpu = cpu;
 /*
     int cpu = (first_minor >> 4) % 24;
     if (>rq_disk->major == 8 && first_minor != 128) {
@@ -1472,7 +1463,7 @@ static void blk_mq_insert_bios(struct request_queue* q, struct list_head * list,
 
 	blk_mq_run_hw_queue(hctx, from_schedule);
 	blk_mq_put_ctx(ctx);
-    
+
 }
 
 void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
@@ -1670,21 +1661,16 @@ static int blk_mq_direct_issue_request(struct request *rq, blk_qc_t *cookie)
 	return -1;
 }
 
-/*
- * Multiple hardware queue variant. This will not use per-process plugs,
- * but will attempt to bypass the hctx queueing if we can go straight to
- * hardware for SYNC IO.
- */
 static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
 {
 	const int is_sync = rw_is_sync(bio->bi_rw);
 	const int is_flush_fua = bio->bi_rw & (REQ_FLUSH | REQ_FUA);
+	struct blk_plug *plug;
+	//unsigned int request_count = 0;
 	struct blk_map_ctx data;
 	struct request *rq;
-	unsigned int request_count = 0;
-	struct blk_plug *plug;
-	struct request *same_queue_rq = NULL;
-	blk_qc_t cookie;
+	blk_qc_t cookie = BLK_QC_T_NONE;
+    bool is_async = false;
 
 	blk_queue_bounce(q, &bio);
 
@@ -1695,65 +1681,58 @@ static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
 
 	blk_queue_split(q, &bio, q->bio_split);
 
-	if (!is_flush_fua && !blk_queue_nomerges(q)) {
-		if (blk_attempt_plug_merge(q, bio, &request_count,
-					   &same_queue_rq))
-			return BLK_QC_T_NONE;
-	} else
-		request_count = blk_plug_queued_count(q);
-
-	rq = blk_mq_map_request(q, bio, &data);
-	if (unlikely(!rq))
+    /*
+	if (!is_flush_fua && !blk_queue_nomerges(q) &&
+	    blk_attempt_plug_merge(q, bio, &request_count, NULL))
 		return BLK_QC_T_NONE;
-
-	cookie = blk_tag_to_qc_t(rq->tag, data.hctx->queue_num);
-
+    */
 	if (unlikely(is_flush_fua)) {
+        rq = blk_mq_map_request(q, bio, &data);
+        if (unlikely(!rq))
+            return BLK_QC_T_NONE;
+
+        cookie = blk_tag_to_qc_t(rq->tag, data.hctx->queue_num);
 		blk_mq_bio_to_request(rq, bio);
 		blk_insert_flush(rq);
 		goto run_queue;
 	}
 
-	plug = current->plug;
 	/*
-	 * If the driver supports defer issued based on 'last', then
-	 * queue it up like normal since we can potentially save some
-	 * CPU this way.
+	 * A task plug currently exists. Since this is completely lockless,
+	 * utilize that to temporarily store requests until the task is
+	 * either done or scheduled away.
 	 */
-	if (((plug && !blk_queue_nomerges(q)) || is_sync) &&
-	    !(data.hctx->flags & BLK_MQ_F_DEFER_ISSUE)) {
-		struct request *old_rq = NULL;
+	plug = current->plug;
+	if (plug) {
+		//blk_mq_bio_to_request(rq, bio);
+        //XXX
+		if (!plug->request_count)
+			trace_block_plug(q);
 
-		blk_mq_bio_to_request(rq, bio);
+		//blk_mq_put_ctx(data.ctx);
 
-		/*
-		 * We do limited pluging. If the bio can be merged, do that.
-		 * Otherwise the existing request in the plug list will be
-		 * issued. So the plug list will have one request at most
-		 */
-		if (plug) {
-			/*
-			 * The plug list might get flushed before this. If that
-			 * happens, same_queue_rq is invalid and plug list is
-			 * empty
-			 */
-			if (same_queue_rq && !list_empty(&plug->mq_list)) {
-				old_rq = same_queue_rq;
-				list_del_init(&old_rq->queuelist);
-			}
-			list_add_tail(&rq->queuelist, &plug->mq_list);
-		} else /* is_sync */
-			old_rq = rq;
-		blk_mq_put_ctx(data.ctx);
-		if (!old_rq)
-			goto done;
-		if (!blk_mq_direct_issue_request(old_rq, &cookie))
-			goto done;
-		blk_mq_insert_request(old_rq, false, true, true);
-		goto done;
+		list_add_tail(&bio->queuelist, &plug->mq_list);
+        plug->request_count++;
+		
+        
+        //if (plug->request_count >= (BLK_MAX_REQUEST_COUNT * plug->disk_count))
+        if (plug->request_count >= 256)
+        //if (request_count >= BLK_MAX_REQUEST_COUNT || plug->request_count >= 16) 
+        {
+            //is_async = (0 != plug->disk_count);
+            blk_flush_plug_list(plug, true);//XXX
+			trace_block_plug(q);
+		}
+		return cookie;
 	}
+    
+    rq = blk_mq_map_request(q, bio, &data);
+    if (unlikely(!rq))
+        return BLK_QC_T_NONE;
 
-	if (!blk_mq_merge_queue_io(data.hctx, data.ctx, rq, bio)) {
+    cookie = blk_tag_to_qc_t(rq->tag, data.hctx->queue_num);
+
+    if (!blk_mq_merge_queue_io(data.hctx, data.ctx, rq, bio)) {
 		/*
 		 * For a SYNC request, send it to the hardware immediately. For
 		 * an ASYNC request, just ensure that we run it later on. The
@@ -1763,11 +1742,110 @@ static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
 run_queue:
 		blk_mq_run_hw_queue(data.hctx, !is_sync || is_flush_fua);
 	}
+
 	blk_mq_put_ctx(data.ctx);
-done:
 	return cookie;
+
 }
 
+/*
+ * Multiple hardware queue variant. This will not use per-process plugs,
+ * but will attempt to bypass the hctx queueing if we can go straight to
+ * hardware for SYNC IO.
+ */
+//static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
+//{
+//	const int is_sync = rw_is_sync(bio->bi_rw);
+//	const int is_flush_fua = bio->bi_rw & (REQ_FLUSH | REQ_FUA);
+//	struct blk_map_ctx data;
+//	struct request *rq;
+//	unsigned int request_count = 0;
+//	struct blk_plug *plug;
+//	struct request *same_queue_rq = NULL;
+//	blk_qc_t cookie;
+//
+//	blk_queue_bounce(q, &bio);
+//
+//	if (bio_integrity_enabled(bio) && bio_integrity_prep(bio)) {
+//		bio_io_error(bio);
+//		return BLK_QC_T_NONE;
+//	}
+//
+//	blk_queue_split(q, &bio, q->bio_split);
+//
+//	if (!is_flush_fua && !blk_queue_nomerges(q)) {
+//		if (blk_attempt_plug_merge(q, bio, &request_count,
+//					   &same_queue_rq))
+//			return BLK_QC_T_NONE;
+//	} else
+//		request_count = blk_plug_queued_count(q);
+//
+//	rq = blk_mq_map_request(q, bio, &data);
+//	if (unlikely(!rq))
+//		return BLK_QC_T_NONE;
+//
+//	cookie = blk_tag_to_qc_t(rq->tag, data.hctx->queue_num);
+//
+//	if (unlikely(is_flush_fua)) {
+//		blk_mq_bio_to_request(rq, bio);
+//		blk_insert_flush(rq);
+//		goto run_queue;
+//	}
+//
+//	plug = current->plug;
+//	/*
+//	 * If the driver supports defer issued based on 'last', then
+//	 * queue it up like normal since we can potentially save some
+//	 * CPU this way.
+//	 */
+//	if (((plug && !blk_queue_nomerges(q)) || is_sync) &&
+//	    !(data.hctx->flags & BLK_MQ_F_DEFER_ISSUE)) {
+//		struct request *old_rq = NULL;
+//
+//		blk_mq_bio_to_request(rq, bio);
+//
+//		/*
+//		 * We do limited pluging. If the bio can be merged, do that.
+//		 * Otherwise the existing request in the plug list will be
+//		 * issued. So the plug list will have one request at most
+//		 */
+//		if (plug) {
+//			/*
+//			 * The plug list might get flushed before this. If that
+//			 * happens, same_queue_rq is invalid and plug list is
+//			 * empty
+//			 */
+//			if (same_queue_rq && !list_empty(&plug->mq_list)) {
+//				old_rq = same_queue_rq;
+//				list_del_init(&old_rq->queuelist);
+//			}
+//			list_add_tail(&rq->queuelist, &plug->mq_list);
+//		} else /* is_sync */
+//			old_rq = rq;
+//		blk_mq_put_ctx(data.ctx);
+//		if (!old_rq)
+//			goto done;
+//		if (!blk_mq_direct_issue_request(old_rq, &cookie))
+//			goto done;
+//		blk_mq_insert_request(old_rq, false, true, true);
+//		goto done;
+//	}
+//
+//	if (!blk_mq_merge_queue_io(data.hctx, data.ctx, rq, bio)) {
+//		/*
+//		 * For a SYNC request, send it to the hardware immediately. For
+//		 * an ASYNC request, just ensure that we run it later on. The
+//		 * latter allows for merging opportunities and more efficient
+//		 * dispatching.
+//		 */
+//run_queue:
+//		blk_mq_run_hw_queue(data.hctx, !is_sync || is_flush_fua);
+//	}
+//	blk_mq_put_ctx(data.ctx);
+//done:
+//	return cookie;
+//}
+//
 /*
  * Single hardware queue variant. This will attempt to use any per-process
  * plug for merging and IO deferral.

@@ -691,6 +691,7 @@ static void nvme_complete_rq(struct request *req)
 {
 	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
 	struct nvme_dev *dev = iod->nvmeq->dev;
+	struct request_queue *q = req->q;
 	int error = 0;
 
 	nvme_unmap_data(dev, req);
@@ -714,6 +715,7 @@ static void nvme_complete_rq(struct request *req)
 	}
 
 	blk_mq_end_request(req, error);
+    blk_mq_start_stopped_hw_queues(q, true);
 }
 
 static void __nvme_process_cq(struct nvme_queue *nvmeq, unsigned int *tag)
