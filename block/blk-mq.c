@@ -1716,7 +1716,7 @@ static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
 		
         
         //if (plug->request_count >= (BLK_MAX_REQUEST_COUNT * plug->disk_count))
-        if (plug->request_count >= 256)
+        if (plug->request_count >= 128)
         //if (request_count >= BLK_MAX_REQUEST_COUNT || plug->request_count >= 16) 
         {
             //is_async = (0 != plug->disk_count);
