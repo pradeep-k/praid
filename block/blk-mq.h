@@ -8,6 +8,11 @@ struct blk_mq_ctx {
 		spinlock_t		lock;
 		struct list_head	rq_list;
 	}  ____cacheline_aligned_in_smp;
+    
+    struct {    
+        struct list_head    tmp_bio_list;
+        struct list_head    queuelist;
+	}  ____cacheline_aligned_in_smp;
 
 	unsigned int		cpu;
 	unsigned int		index_hw;
