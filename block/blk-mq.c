@@ -1469,8 +1469,8 @@ void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
         }
         list_add_tail(&bio->queuelist, &ctx->tmp_bio_list);
     }
-    put_cpu();
     blk_mq_insert_bios(&ctx_list, from_schedule);
+    put_cpu();
 }
 
 static void blk_mq_bio_to_request(struct request *rq, struct bio *bio)
@@ -2267,6 +2267,9 @@ static void blk_mq_init_cpu_queues(struct request_queue *q,
 		__ctx->cpu = i;
 		spin_lock_init(&__ctx->lock);
 		INIT_LIST_HEAD(&__ctx->rq_list);
+        INIT_LIST_HEAD(&__ctx->tmp_bio_list);
+        INIT_LIST_HEAD(&__ctx->queuelist);
+
 		__ctx->queue = q;
 
 		/* If the cpu isn't online, the cpu is mapped to first hctx */
