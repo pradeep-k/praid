@@ -721,13 +721,27 @@ static bool blk_mq_attempt_merge(struct request_queue *q,
 	return false;
 }
 
+static int plug_bio_cmp(void *priv, struct list_head *a, struct list_head *b)
+{
+	struct bio *rqa = container_of(a, struct bio, queuelist);
+	struct bio *rqb = container_of(b, struct bio, queuelist);
+	
+    return !((rqa->bi_bdev == rqb->bi_bdev) &&
+		  (rqa->bi_iter.bi_sector < rqb->bi_iter.bi_sector));
+
+	/*return !(rqa->bi_bdev < rqb->bi_bdev ||
+		 (rqa->bi_bdev == rqb->bi_bdev &&
+		  rqa->bi_iter.bi_sector < rqb->bi_iter.bi_sector));*/
+}
+
 /*
  * Process software queues that have been marked busy, splicing them
  * to the for-dispatch
  */
 static void flush_busy_ctxs(struct blk_mq_hw_ctx *hctx, struct list_head *list)
 {
-	struct blk_mq_ctx *ctx;
+	LIST_HEAD(tmp_list);
+    struct blk_mq_ctx *ctx;
 	int i;
 
 	for (i = 0; i < hctx->ctx_map.size; i++) {
@@ -747,8 +761,10 @@ static void flush_busy_ctxs(struct blk_mq_hw_ctx *hctx, struct list_head *list)
 			ctx = hctx->ctxs[bit + off];
 			clear_bit(bit, &bm->word);
 			spin_lock(&ctx->lock);
-			list_splice_tail_init(&ctx->rq_list, list);
+			list_splice_tail_init(&ctx->rq_list, &tmp_list);
 			spin_unlock(&ctx->lock);
+            list_sort(NULL, &tmp_list, plug_bio_cmp);
+			list_splice_tail_init(&tmp_list, list);
 
 			bit++;
 		} while (1);
@@ -1278,17 +1294,8 @@ static void blk_mq_insert_requests(struct request_queue *q,
 	blk_mq_put_ctx(current_ctx);
 }
 */
-/*
-static int plug_bio_cmp(void *priv, struct list_head *a, struct list_head *b)
-{
-	struct bio *rqa = container_of(a, struct bio, queuelist);
-	struct bio *rqb = container_of(b, struct bio, queuelist);
 
-	return !(rqa->bi_bdev < rqb->bi_bdev ||
-		 (rqa->bi_bdev == rqb->bi_bdev &&
-		  rqa->bi_iter.bi_sector < rqb->bi_iter.bi_sector));
-}
-*/
+
 /*
 static int plug_ctx_cmp(void *priv, struct list_head *a, struct list_head *b)
 {
