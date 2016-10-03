@@ -808,6 +808,13 @@ static void blk_add_trace_bio_frontmerge(void *ignore,
 	blk_add_trace_bio(q, bio, BLK_TA_FRONTMERGE, 0);
 }
 
+static void blk_add_trace_bio_insert(void *ignore,
+					 struct request_queue *q,
+					 struct bio *bio)
+{
+	blk_add_trace_bio(q, bio, BLK_TA_INSERT, 0);
+}
+
 static void blk_add_trace_bio_queue(void *ignore,
 				    struct request_queue *q, struct bio *bio)
 {
@@ -1001,6 +1008,8 @@ static void blk_register_tracepoints(void)
 	WARN_ON(ret);
 	ret = register_trace_block_bio_frontmerge(blk_add_trace_bio_frontmerge, NULL);
 	WARN_ON(ret);
+	ret = register_trace_block_bio_insert(blk_add_trace_bio_insert, NULL);
+	WARN_ON(ret);
 	ret = register_trace_block_bio_queue(blk_add_trace_bio_queue, NULL);
 	WARN_ON(ret);
 	ret = register_trace_block_getrq(blk_add_trace_getrq, NULL);
@@ -1030,6 +1039,7 @@ static void blk_unregister_tracepoints(void)
 	unregister_trace_block_getrq(blk_add_trace_getrq, NULL);
 	unregister_trace_block_bio_queue(blk_add_trace_bio_queue, NULL);
 	unregister_trace_block_bio_frontmerge(blk_add_trace_bio_frontmerge, NULL);
+	unregister_trace_block_bio_insert(blk_add_trace_bio_insert, NULL);
 	unregister_trace_block_bio_backmerge(blk_add_trace_bio_backmerge, NULL);
 	unregister_trace_block_bio_complete(blk_add_trace_bio_complete, NULL);
 	unregister_trace_block_bio_bounce(blk_add_trace_bio_bounce, NULL);

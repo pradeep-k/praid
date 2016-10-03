@@ -1422,7 +1422,6 @@ static void blk_mq_insert_bios(struct list_head * ctx_list,
     struct bio *bio;
     struct request_queue *q;
     LIST_HEAD(list);
-	unsigned int depth = 4;
     int cpu = WORK_CPU_UNBOUND;
     int first_minor = 0;
     int major = 0;
@@ -1431,7 +1430,6 @@ static void blk_mq_insert_bios(struct list_head * ctx_list,
         ctx = list_entry(ctx_list->next, struct blk_mq_ctx, queuelist);
 		list_del_init(&ctx->queuelist);
         q = ctx->queue;
-	    trace_block_unplug(q, depth, !from_schedule);
         
         bio = list_entry(ctx->tmp_bio_list.next,struct bio, queuelist);
         major = bio->bi_bdev->bd_disk->major;
@@ -1444,7 +1442,7 @@ static void blk_mq_insert_bios(struct list_head * ctx_list,
 	    spin_unlock(&ctx->lock);
         
         cpu = get_affinity_cpu(major, first_minor);
-        if (unlikely(hctx->next_cpu != cpu)) {
+        if (unlikely(hctx->next_cpu != cpu && hctx->next_cpu == WORK_CPU_UNBOUND )) {
                hctx->next_cpu = cpu;
         }
 	    blk_mq_run_hw_queue(hctx, from_schedule);
@@ -1472,8 +1470,10 @@ void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
         
 	    ctx = __blk_mq_get_ctx(q, cpu);
         if (list_empty(&ctx->tmp_bio_list)) {
+	        trace_block_unplug(q, 0, !from_schedule);
             list_add_tail(&ctx->queuelist, &ctx_list);
         }
+	    trace_block_bio_insert(q, bio);
         list_add_tail(&bio->queuelist, &ctx->tmp_bio_list);
     }
     blk_mq_insert_bios(&ctx_list, from_schedule);
