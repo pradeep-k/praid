@@ -1442,7 +1442,7 @@ static void blk_mq_insert_bios(struct list_head * ctx_list,
 	    spin_unlock(&ctx->lock);
         
         cpu = get_affinity_cpu(major, first_minor);
-        if (unlikely(hctx->next_cpu != cpu && hctx->next_cpu == WORK_CPU_UNBOUND )) {
+        if (unlikely((hctx->next_cpu != cpu && cpu != WORK_CPU_UNBOUND) || hctx->next_cpu == WORK_CPU_UNBOUND )) {
                hctx->next_cpu = cpu;
         }
 	    blk_mq_run_hw_queue(hctx, from_schedule);
