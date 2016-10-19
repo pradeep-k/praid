@@ -738,7 +738,7 @@ static int plug_bio_cmp(void *priv, struct list_head *a, struct list_head *b)
  * Process software queues that have been marked busy, splicing them
  * to the for-dispatch
  */
-static void flush_busy_ctxs(struct blk_mq_hw_ctx *hctx, struct list_head *list)
+static void flush_busy_ctxs(struct blk_mq_hw_ctx *hctx, struct request_queue* q, struct list_head *list)
 {
 	LIST_HEAD(tmp_list);
     struct blk_mq_ctx *ctx;
@@ -763,7 +763,9 @@ static void flush_busy_ctxs(struct blk_mq_hw_ctx *hctx, struct list_head *list)
 			spin_lock(&ctx->lock);
 			list_splice_tail_init(&ctx->rq_list, &tmp_list);
 			spin_unlock(&ctx->lock);
-            list_sort(NULL, &tmp_list, plug_bio_cmp);
+            if (!blk_queue_nomerges(q)){
+                list_sort(NULL, &tmp_list, plug_bio_cmp);
+            }
 			list_splice_tail_init(&tmp_list, list);
 
 			bit++;
@@ -936,7 +938,7 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
     /*
 	 * Touch any software queue that has pending entries.
 	 */
-	flush_busy_ctxs(hctx, &bio_list);
+	flush_busy_ctxs(hctx, q, &bio_list);
 
     while(!list_empty(&bio_list)) {
 		int ret;
@@ -1680,7 +1682,7 @@ static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
 		
         
         //if (plug->request_count >= (BLK_MAX_REQUEST_COUNT * plug->disk_count))
-        if (plug->request_count >= 128)
+        if (plug->request_count >= 32)
         //if (request_count >= BLK_MAX_REQUEST_COUNT || plug->request_count >= 16) 
         {
             //is_async = (0 != plug->disk_count);
